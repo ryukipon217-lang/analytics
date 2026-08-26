@@ -814,9 +814,12 @@ function getMid(){return localStorage.getItem(LS_MID)||'';}
 function getTok(){return localStorage.getItem(LS_TOK)||'';}
 function clearSession(){localStorage.removeItem(LS_MID);localStorage.removeItem(LS_TOK);}
 function wait(ms){return new Promise(function(r){setTimeout(r,ms);});}
-async function fetchData(action,params){
+/* 軽量読取ミラー(read-api.gs): 重い3本を高速化。失敗時は本URLへ自動フォールバック。 */
+var READ_API_URL='https://script.google.com/macros/s/AKfycbxm-_IBapGbmilVQSzPhsLhL6cMwm8_bIwxyq8Wh8j3IxXjGjBz234EwEohFe18EAY/exec';
+var READ_API_ACTIONS={listEvents:1,listParticipants:1,listRegistrations:1,listTodos:1};
+async function fetchFrom(base,action,params){
   var p=Object.assign({},params||{},{token:getTok()});
-  var u=GAS_URL+'?action='+encodeURIComponent(action)+'&memberId='+encodeURIComponent(getMid())+'&params='+encodeURIComponent(JSON.stringify(p));
+  var u=base+'?action='+encodeURIComponent(action)+'&memberId='+encodeURIComponent(getMid())+'&params='+encodeURIComponent(JSON.stringify(p));
   var r=await fetch(u,{method:'GET'});
   if(!r.ok) throw new Error('HTTP '+r.status);
   var j=JSON.parse(await r.text());
@@ -826,12 +829,13 @@ async function fetchData(action,params){
   if(!j||!j.ok) throw new Error(em||'取得に失敗しました');
   return j.data;
 }
-async function fetchRetry(action,params,tries){
-  tries=tries||3; var last;
-  for(var i=0;i<tries;i++){ try{ return await fetchData(action,params); }catch(e){ if(e.message==='AUTH_REQUIRED') throw e; last=e; await wait(300*(i+1)); } }
-  throw last;
+async function fetchData(action,params){ return fetchFrom(GAS_URL,action,params); }
+async function fetchFast(action,params){
+  if(READ_API_ACTIONS[action]){ try{ return await fetchFrom(READ_API_URL,action,params); }catch(e){ /* read-api失敗(認証含む)は本URLへフォールバック */ } }
+  return fetchFrom(GAS_URL,action,params);
 }
-async function fetchSoft(action,params){ try{ return await fetchRetry(action,params,2); }catch(e){ if(e&&e.message==='AUTH_REQUIRED') throw e; return null; } }
+async function retryFn(fn,tries){ tries=tries||3; var last; for(var i=0;i<tries;i++){ try{ return await fn(); }catch(e){ if(e&&e.message==='AUTH_REQUIRED') throw e; last=e; await wait(300*(i+1)); } } throw last; }
+async function softFn(fn){ try{ return await retryFn(fn,2); }catch(e){ if(e&&e.message==='AUTH_REQUIRED') throw e; return null; } }
 async function postData(action,payload){
   var r=await fetch(GAS_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:action,payload:payload||{},memberId:getMid(),token:getTok()})});
   if(!r.ok) throw new Error('HTTP '+r.status);
@@ -998,10 +1002,18 @@ var MOCK_SUMMARY=[
 function yen(n){return '¥'+Math.round(Number(n)||0).toLocaleString('en-US');}
 function yenM(n){return '¥'+((Number(n)||0)/1000000).toFixed(3)+'M';}
 function pctN(v,u){return v==null?'—':(v+(u||'%'));}
+function iOrNull(v){return v!=null?String(v):null;}
 function realMap(C){return {
- 'イベント出席率':pctN(C.attRate),'無断欠席率':C.noShowRate+'%','リピート率':C.repRate+'%','リピーター数':C.repeaters+'名','ヘビーユーザー':C.heavy+'名','1人あたり参加':C.avgPerUser+'回','累計有効申込':String(C.totReg),'今月の申込':C.regThisMonth+'件','総申込(全状態)':String(C.allRegsN),'日次申込ペース':C.pace+'/日','直近30日申込':String(C.last30),'翌月申込予測':String(C.forecastNext),'キャンセル率':C.cancelRate+'%','キャンセル件数':C.cancelled+'件','定員充足率':pctN(C.fillRate),'ユニーク参加者':String(C.usersN),'累計純売上':yen(C.cumRev),'今月の純売上':yen(C.revThisMonth),'返金率':C.refundRate+'%','客単価(AOV)':yen(C.aov),'ARPU':yen(C.arpu),'回収率':pctN(C.collectRate),'有効申込':C.totReg+'件','在籍メンバー':String(C.activeMembers),'今月の新規入会':String(C.newThisMonth),'今月の退会':String(C.leftThisMonth),'累計退会率':C.churnRate+'%','会議出席率(平均)':pctN(C.avgAttn),'平均健全率':pctN(C.avgHealth),'Kudos総数':(C.kudTotal!=null?String(C.kudTotal):null),'今月のKudos':(C.kudThisMonth!=null?String(C.kudThisMonth):null)
+ 'イベント出席率':pctN(C.attRate),'無断欠席率':C.noShowRate+'%','リピート率':C.repRate+'%','リピーター数':C.repeaters+'名','ヘビーユーザー':C.heavy+'名','1人あたり参加':C.avgPerUser+'回','累計有効申込':String(C.totReg),'今月の申込':C.regThisMonth+'件','総申込(全状態)':String(C.allRegsN),'日次申込ペース':C.pace+'/日','直近30日申込':String(C.last30),'翌月申込予測':String(C.forecastNext),'キャンセル率':C.cancelRate+'%','キャンセル件数':C.cancelled+'件','定員充足率':pctN(C.fillRate),'ユニーク参加者':String(C.usersN),'累計純売上':yen(C.cumRev),'今月の純売上':yen(C.revThisMonth),'返金率':C.refundRate+'%','客単価(AOV)':yen(C.aov),'ARPU':yen(C.arpu),'回収率':pctN(C.collectRate),'有効申込':C.totReg+'件','在籍メンバー':String(C.activeMembers),'今月の新規入会':String(C.newThisMonth),'今月の退会':String(C.leftThisMonth),'累計退会率':C.churnRate+'%','会議出席率(平均)':pctN(C.avgAttn),'平均健全率':pctN(C.avgHealth),
+ '累計チェックイン':(C.checkedIn!=null?C.checkedIn.toLocaleString('en-US'):null),'確定参加':iOrNull(C.confirmed),'無断欠席件数':(C.noShow!=null?C.noShow+'件':null),
+ '総メンバー(累計)':iOrNull(C.membersN),'新人(90日以内)':iOrNull(C.newcomers90),'部署数':iOrNull(C.deptCount),'平均部署人数':(C.avgDeptSize!=null?C.avgDeptSize+'名':null),'平均在籍日数':(C.avgTenure!=null?C.avgTenure+'日':null),'低出席(会議<50%)':iOrNull(C.lowAttn),
+ '週次評価 平均':iOrNull(C.evalAvg),'評価カバレッジ':(C.evalCoverage!=null?C.evalCoverage+'%':null),'評価下降':iOrNull(C.evalDown),'低評価(2点以下)':iOrNull(C.evalLow),
+ '1on1・面談数':iOrNull(C.oneOnOne),'会議件数':iOrNull(C.meetingCount),'録音率':(C.recordRate!=null?C.recordRate+'%':null),
+ 'Kudos総数':iOrNull(C.kudTotal),'今月のKudos':iOrNull(C.kudThisMonth),'1人あたりKudos':iOrNull(C.kudPerMember),
+ 'アプリUU':iOrNull(C.appUU),'ログイン数':iOrNull(C.logins),'アンケート数':iOrNull(C.surveyCount),'公開中アンケート':iOrNull(C.surveyOpen),'総回答数':iOrNull(C.surveyResp)
 };}
-function applyReal(mockArr,C){ var m=realMap(C); return mockArr.map(function(x){ var rv=m[x[0]]; return [x[0],(rv!=null?rv:x[1]),x[2],x[3],x[4]]; }); }
+/* 実データモード: マッピング済のみ実値。未取得/未算出は「—」(neutral)=偽のモック値は出さない。 */
+function applyReal(mockArr,C){ var m=realMap(C); return mockArr.map(function(x){ var rv=m[x[0]]; if(rv==null) return [x[0],'—',x[2],'neutral','']; return [x[0],rv,x[2],x[3],x[4]]; }); }
 function clsTone(t){return t==='good'?'good':t==='watch'?'watch':t==='bad'?'bad':'neutral';}
 function metricCard(m){return '<div class="metric '+clsTone(m[3])+'"><div class="name">'+m[0]+'</div><div class="value">'+m[1]+'</div><div class="target">目標 '+m[2]+(m[4]?' · 変化 '+m[4]:'')+'</div></div>';}
 function bucketT(a){return {good:a.filter(function(x){return x[3]==='good';}),watch:a.filter(function(x){return x[3]==='watch';}),bad:a.filter(function(x){return x[3]==='bad';}),neutral:a.filter(function(x){return x[3]==='neutral';})};}
@@ -1086,9 +1098,10 @@ function renderEventView(C){
 }
 function renderOrgView(C){
   var b=bucketT(applyReal(MOCK_ORG,C));
-  var health=(C.avgHealth!=null?C.avgHealth:78);
-  var pPeople=Math.max(4,Math.min(100,C.activeMembers)), pAct=(C.avgAttn!=null?C.avgAttn:74), pHealth=health, pCul=Math.max(4,Math.min(100,(C.kudThisMonth||0)*2));
-  var ring='<div class="ring" style="background:conic-gradient(var(--teal) 0 '+health+'%, rgba(255,255,255,.08) '+health+'% 100%)"><div class="inner"><div><strong>'+health+'%</strong><small>HEALTH SCORE</small></div></div></div>';
+  var health=(C.avgHealth!=null?C.avgHealth:null);
+  var ringPct=(health!=null?health:0);
+  var pPeople=Math.max(4,Math.min(100,C.activeMembers||0)), pAct=(C.avgAttn!=null?C.avgAttn:0), pHealth=ringPct, pCul=(C.kudThisMonth!=null?Math.max(4,Math.min(100,C.kudThisMonth*2)):0);
+  var ring='<div class="ring" style="background:conic-gradient(var(--teal) 0 '+ringPct+'%, rgba(255,255,255,.08) '+ringPct+'% 100%)"><div class="inner"><div><strong>'+(health!=null?health+'%':'—')+'</strong><small>HEALTH SCORE</small></div></div></div>';
   var pillars='<div class="pillars">'+
    '<div class="pillar"><div class="nm">People</div><div class="val">'+C.activeMembers+'</div><div class="track"><i style="width:'+pPeople+'%"></i></div></div>'+
    '<div class="pillar"><div class="nm">Activity</div><div class="val">'+pctN(C.avgAttn)+'</div><div class="track"><i style="width:'+pAct+'%"></i></div></div>'+
@@ -1145,30 +1158,85 @@ function renderAlertsView(C){
 /* ---- 6) load + status + login ---- */
 function setStatus(mode,label){ var c=q('#statusChip'), t=q('#statusTxt'); if(!c) return; c.className='chip click '+(mode==='live'?'live':mode==='loading'?'':'demo'); if(t) t.textContent=label||(mode==='live'?'実データ':mode==='loading'?'読込中…':'デモ表示'); }
 function showLoad(b){ var g=q('#loadGate'); if(g) g.classList.toggle('hidden',!b); }
-async function loadReal(){
-  var res=await Promise.all([ fetchRetry('listEvents'), fetchRetry('listRegistrations'), fetchSoft('listParticipants'), fetchSoft('listMembers'), fetchSoft('getSettings'), fetchSoft('listKudos',{limit:500}) ]);
-  var ev=rowsOf(res[0]), rg=rowsOf(res[1]), pa=rowsOf(res[2]), mem=rowsOf(res[3]);
-  var setD=res[4]; if(setD&&setD.settings) setD=setD.settings; if(!setD||typeof setD!=='object') setD={};
-  var C=computeKpiContext({ev:ev,rg:rg,pa:pa,mem:mem,setD:setD,now:new Date()});
-  var M=arr(mem);
-  var hs=M.map(function(m){return Number(m.health);}).filter(function(n){return !isNaN(n);});
+function num(v){var n=Number(v);return isNaN(n)?null:n;}
+/* mem/kud/mtg/evalL/act/srv から追加指標を算出して C に付与(取得できない源は null=UIで「—」) */
+function attachExtras(C,mem,kud,mtg,evalL,act,srv){
+  var M=arr(mem), A=M.filter(function(m){return m.isActive!==false;});
+  var hs=M.map(function(m){return num(m.health);}).filter(function(n){return n!=null;});
   C.avgHealth=hs.length?Math.round(hs.reduce(function(a,b){return a+b;},0)/hs.length):null;
-  var as=M.map(function(m){return Number(m.attnRate);}).filter(function(n){return !isNaN(n);});
+  var as=M.map(function(m){return num(m.attnRate);}).filter(function(n){return n!=null;});
   C.avgAttn=as.length?Math.round(as.reduce(function(a,b){return a+b;},0)/as.length):null;
-  var ka=rowsOf(res[5]); var ymNow=(C.months&&C.months[11])||'';
-  C.kudThisMonth=ka.filter(function(k){return String(k.createdAt||'').slice(0,7)===ymNow;}).length;
-  C.kudTotal=ka.length;
+  var depts={}; A.forEach(function(m){var d=m.dept||(m.primary&&m.primary.deptName)||m.deptName; if(d)depts[String(d)]=1;});
+  C.deptCount=M.length?(Object.keys(depts).length||null):null;
+  C.avgDeptSize=C.deptCount?Math.round(A.length/C.deptCount*10)/10:null;
+  var nowT=Date.now();
+  C.newcomers90=M.length?A.filter(function(m){var d=Date.parse(m.joinedAt||''); return isFinite(d)&&(nowT-d)<=90*86400000;}).length:null;
+  var ten=A.map(function(m){var d=Date.parse(m.joinedAt||''); return isFinite(d)?Math.round((nowT-d)/86400000):null;}).filter(function(n){return n!=null;});
+  C.avgTenure=ten.length?Math.round(ten.reduce(function(a,b){return a+b;},0)/ten.length):null;
+  C.lowAttn=as.length?M.filter(function(m){var v=num(m.attnRate); return v!=null&&v<50;}).length:null;
+  var ka=rowsOf(kud); var ymNow=(C.months&&C.months[11])||'';
+  C.kudTotal=(kud==null)?null:ka.length;
+  C.kudThisMonth=(kud==null)?null:ka.filter(function(k){return String(k.createdAt||'').slice(0,7)===ymNow;}).length;
+  C.kudPerMember=(C.kudTotal!=null&&A.length)?Math.round(C.kudTotal/A.length*10)/10:null;
+  var mt=(mtg&&mtg.meetings)?mtg.meetings:(mtg==null?null:rowsOf(mtg));
+  if(mt==null){ C.meetingCount=null; C.oneOnOne=null; C.recordRate=null; }
+  else { C.meetingCount=mt.length; C.oneOnOne=mt.filter(function(x){return /1on1|面談/.test(String(x.meetingType||'')+String(x.meetingName||''));}).length; var rec=mt.filter(function(x){return x.recordingUrl||x.intakeId||x.file_url;}).length; C.recordRate=mt.length?Math.round(rec/mt.length*100):null; }
+  var emo=evalL&&evalL.members?evalL.members:null;
+  if(emo){ var vs=Object.keys(emo).map(function(k){return emo[k];}); var last=vs.map(function(o){return num(o&&o.last);}).filter(function(n){return n!=null;}); C.evalAvg=last.length?Math.round(last.reduce(function(a,b){return a+b;},0)/last.length*10)/10:null; C.evalCoverage=A.length?Math.round(last.length/A.length*100):null; C.evalDown=vs.filter(function(o){var t=num(o&&o.trend);return t!=null&&t<0;}).length; C.evalLow=last.filter(function(n){return n<=2;}).length; }
+  else { C.evalAvg=null;C.evalCoverage=null;C.evalDown=null;C.evalLow=null; }
+  C.appUU=(act&&act.activeUsers!=null)?act.activeUsers:null;
+  C.logins=(act&&act.logins!=null)?act.logins:null;
+  var sv=rowsOf(srv);
+  if(srv==null){ C.surveyCount=null;C.surveyOpen=null;C.surveyResp=null; }
+  else { C.surveyCount=sv.length; C.surveyOpen=sv.filter(function(s){return s.active||s.status==='公開中'||s.status==='公開';}).length; C.surveyResp=sv.reduce(function(a,s){return a+(num(s.responseCount)||(Array.isArray(s.responses)?s.responses.length:0));},0); }
   return C;
 }
+/* 段階ロード: まず core(events+regs)=軽量読取APIで高速→部分描画、続けて残りを裏で取得 */
+async function loadReal(onPartial){
+  var core=await Promise.all([ retryFn(function(){return fetchFast('listEvents');}), retryFn(function(){return fetchFast('listRegistrations');}) ]);
+  var ev=rowsOf(core[0]), rg=rowsOf(core[1]);
+  if(onPartial){ try{ onPartial(attachExtras(computeKpiContext({ev:ev,rg:rg,now:new Date()}),null,null,null,null,null)); }catch(e){} }
+  var rest=await Promise.all([
+    softFn(function(){return fetchFast('listParticipants');}),
+    softFn(function(){return fetchData('listMembers');}),
+    softFn(function(){return fetchData('getSettings');}),
+    softFn(function(){return fetchData('listKudos',{limit:500});}),
+    softFn(function(){return fetchData('listMinutesMeetings');}),
+    softFn(function(){return fetchData('listWeeklyEvalSparkForMembers',{weeks:12});}),
+    softFn(function(){return fetchData('admin.getActionStats',{days:90});}),
+    softFn(function(){return fetchData('listSurveys');})
+  ]);
+  var pa=rowsOf(rest[0]), mem=rowsOf(rest[1]);
+  var setD=rest[2]; if(setD&&setD.settings) setD=setD.settings; if(!setD||typeof setD!=='object') setD={};
+  var C=computeKpiContext({ev:ev,rg:rg,pa:pa,mem:mem,setD:setD,now:new Date()});
+  return attachExtras(C,mem,rest[3],rest[4],rest[5],rest[6],rest[7]);
+}
+/* localStorage キャッシュ(端末内・ログイン者のみ・非公開): 次回以降は即描画→裏で更新 */
+var CACHE_KEY='analytics.ctx.v1';
+function cacheGet(){ try{ var raw=localStorage.getItem(CACHE_KEY); if(!raw) return null; var o=JSON.parse(raw); if(o&&o.mid===getMid()&&o.C) return o; }catch(e){} return null; }
+function cacheSet(C){ try{ localStorage.setItem(CACHE_KEY,JSON.stringify({mid:getMid(),at:Date.now(),C:C})); }catch(e){} }
+function agoTxt(ts){ var s=Math.max(0,Math.round((Date.now()-ts)/1000)); if(s<60) return '今'; var m=Math.round(s/60); if(m<60) return m+'分前'; return Math.round(m/60)+'時間前'; }
+function userName(){ return (window.currentUser&&(window.currentUser.name||(window.currentUser.member&&window.currentUser.member.name)))||''; }
+var refreshTimer=null;
+function scheduleRefresh(){
+  if(refreshTimer) return;
+  refreshTimer=setInterval(function(){
+    if(document.hidden||!getTok()) return;
+    loadReal(null).then(function(C){ renderReal(C); cacheSet(C); var nm=userName(); setStatus('live','実データ'+(nm?' · '+nm:'')+' · 更新 今'); }).catch(function(){});
+  }, 10*60*1000);
+}
 async function startLoad(){
-  setStatus('loading','読込中…'); showLoad(true);
+  var cached=cacheGet();
+  if(cached){ renderReal(cached.C); setStatus('live','実データ · 更新中…'); showLoad(false); }
+  else { setStatus('loading','読込中…'); showLoad(true); }
   try{
-    var C=await loadReal();
-    renderReal(C);
-    var nm=(window.currentUser&&(window.currentUser.name||(window.currentUser.member&&window.currentUser.member.name)))||'';
-    setStatus('live','実データ'+(nm?' · '+nm:''));
+    var C=await loadReal(cached?null:function(C1){ renderReal(C1); setStatus('loading','主要指標を表示 · 続き読込…'); showLoad(false); });
+    renderReal(C); cacheSet(C);
+    var nm=userName(); setStatus('live','実データ'+(nm?' · '+nm:'')+' · 更新 今');
+    scheduleRefresh();
   }catch(e){
     if(e&&e.message==='AUTH_REQUIRED'){ clearSession(); setStatus('demo','デモ表示'); openLogin('セッションが切れました。再ログインしてください。'); }
+    else if(cached){ setStatus('live','実データ(キャッシュ) · 最終 '+agoTxt(cached.at)); }
     else { setStatus('demo','デモ表示（取得失敗）'); }
   }finally{ showLoad(false); }
 }
@@ -1227,7 +1295,7 @@ function buildOverlays(){
 function logoutConfirm(){ if(confirm('ログアウトしますか？（デモ表示に戻ります）')){ clearSession(); location.reload(); } }
 
 /* ---- 7) sample context for QA/screenshot (?selftest / #selftest[:view]) ---- */
-var SAMPLE_C={now:new Date(),months:[],cumRev:1284000,totReg:342,attRate:68,cancelRate:18,cancelRatePrev:14,repRate:41,repeaters:96,heavy:23,avgPerUser:2.4,fillRate:76,noShowRate:8,revThisMonth:186000,revPrevMonth:172000,regThisMonth:48,regPrevMonth:44,allRegsN:410,checkedIn:208,usersN:142,aov:3800,arpu:2150,collectRate:88,refundRate:4,cancelled:68,last30:96,pace:3.2,forecastNext:52,activeMembers:84,newThisMonth:6,leftThisMonth:1,churnRate:12,avgHealth:78,avgAttn:74,kudThisMonth:38,kudTotal:214,
+var SAMPLE_C={now:new Date(),months:[],cumRev:1284000,totReg:342,attRate:68,cancelRate:18,cancelRatePrev:14,repRate:41,repeaters:96,heavy:23,avgPerUser:2.4,fillRate:76,noShowRate:8,revThisMonth:186000,revPrevMonth:172000,regThisMonth:48,regPrevMonth:44,allRegsN:410,checkedIn:208,usersN:142,aov:3800,arpu:2150,collectRate:88,refundRate:4,cancelled:68,last30:96,pace:3.2,forecastNext:52,activeMembers:84,newThisMonth:6,leftThisMonth:1,churnRate:12,avgHealth:78,avgAttn:74,kudThisMonth:38,kudTotal:214,confirmed:57,noShow:14,membersN:97,deptCount:10,avgDeptSize:8.4,avgTenure:312,newcomers90:9,lowAttn:3,evalAvg:3.8,evalCoverage:82,evalDown:4,evalLow:2,oneOnOne:36,meetingCount:58,recordRate:72,kudPerMember:2.5,appUU:128,logins:962,surveyCount:12,surveyOpen:3,surveyResp:248,
   revSeries:[62000,74000,86000,94000,108000,118000,126000,138000,150000,166000,178000,186000],
   funnel:{reach:null,apply:410,qualified:342,attend:208,revenue:1284000,applyToQualified:83,qualifiedToAttend:61},
   categoryMix:[{name:'セミナー',color:'#69a8ff','申込':128,'純売上':487000,'%':38},{name:'交流会',color:'#65e0c6','申込':96,'純売上':308000,'%':24},{name:'ワークショップ',color:'#ffd36d','申込':54,'純売上':231000,'%':18},{name:'勉強会',color:'#b39cff','申込':40,'純売上':154000,'%':12},{name:'その他',color:'#9aa4b2','申込':24,'純売上':104000,'%':8}]};
